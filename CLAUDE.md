@@ -41,8 +41,29 @@ tests/
 └── integration/    ← Testcontainers (Redpanda + Redis + Postgres reales).
 
 docs/
+├── index.md                  ← Hub de navegación
+├── running-and-validating.md ← 13 pasos de validación end-to-end
+├── architecture.md
+├── local-development.md
+├── configuration.md
+├── testing.md
+├── error-handling.md
+├── observability.md
+├── deployment.md
 ├── creating-a-consumer.md
-└── patterns/       ← Patterns opt-in: background tasks, fair scheduling, db.
+└── patterns/
+    ├── background-tasks.md
+    ├── concurrency.md
+    ├── database.md
+    └── idempotency.md
+
+.claude/
+└── agents/
+    ├── testing.md           ← Agente: escribe, ejecuta y valida tests
+    ├── consumer-builder.md  ← Agente: construye consumers completos
+    └── producer-validator.md ← Agente: genera producer + valida end-to-end
+
+TODO.md                      ← 19 pendientes organizados por prioridad
 ```
 
 ## Componentes clave en `src/core/`
@@ -179,7 +200,8 @@ El handler nunca ve duplicados, nunca commitea, nunca decide retry.
 
 ## Para crear un nuevo consumer
 
-Leer `docs/creating-a-consumer.md`. Resumen: `cp -r src/consumers/example/
+**Con el agente**: invocar `.claude/agents/consumer-builder.md`.
+**Manual**: leer `docs/creating-a-consumer.md`. Resumen: `cp -r src/consumers/example/
 src/consumers/<nuevo>/`, cambiar prefijo de settings, reemplazar schemas y
 handlers, adaptar consumer.py, registrar entry point en pyproject.toml.
 
@@ -189,3 +211,49 @@ Leer `docs/patterns/background-tasks.md`. Overridear
 `process_message_background()` en vez de `process_message()`. El BaseConsumer
 commitea offset inmediato; la durabilidad viene de la tabla con `status='processing'`.
 Implementar crash recovery en `on_start()`.
+
+## Sistema de agentes
+
+Tres agentes especializados en `.claude/agents/`. El flujo de trabajo es secuencial:
+
+```
+consumer-builder  →  testing  →  producer-validator
+  (construir)       (validar)     (probar en vivo)
+```
+
+### Orquestación estándar
+
+1. **`consumer-builder`** — Crea o modifica un consumer completo:
+   schemas, handlers, settings, consumer.py, metrics.py, entry point,
+   env vars, K8s YAML. NO corre tests (eso es del siguiente agente).
+
+2. **`testing`** — Lee el consumer recién creado/modificado, escribe tests
+   unitarios y de integración, los **ejecuta con `uv run pytest`**, itera
+   hasta que todos pasen, valida ruff + mypy. Reporta PASS total o lista
+   de fallas con causa raíz.
+
+3. **`producer-validator`** (solo si testing reportó PASS total) —
+   Lee los schemas del consumer, genera código producer, publica eventos
+   de prueba contra la infra local (docker compose debe estar corriendo),
+   verifica persistencia en DB y métricas Prometheus, prueba el DLQ.
+
+### Cuándo invocar cada agente directamente
+
+| Tarea | Agente |
+|---|---|
+| Crear consumer nuevo de cero | `consumer-builder` |
+| Modificar handlers o schemas existentes | `consumer-builder` |
+| Escribir tests para código ya existente | `testing` |
+| Correr y arreglar tests que fallan | `testing` |
+| Publicar eventos de prueba manualmente | `producer-validator` |
+| Validar que el consumer procesa bien | `producer-validator` |
+
+### Regla de oro
+
+**`testing` siempre antes de `producer-validator`**. Si los tests no pasan,
+no tiene sentido hacer la validación con infra real.
+
+## Pendientes del proyecto
+
+Ver `TODO.md` en la raíz. 19 ítems priorizados. Los P1 (3 ítems) bloquean
+el funcionamiento end-to-end con DB real.
