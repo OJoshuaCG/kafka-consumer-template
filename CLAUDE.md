@@ -1,0 +1,191 @@
+# kafka-consumer-template — Guía para Agentes de IA
+
+Este documento da el contexto que un agente necesita para trabajar
+productivamente en este proyecto.
+
+## Qué es
+
+Template Python para Kafka/Redpanda consumers de producción. **NO es una
+aplicación FastAPI** — los consumers son procesos standalone. FastAPI vive
+únicamente en `tools/producer_demo/` como dev tool, y está garantizado por
+4 capas de defensa que nunca llegue a una imagen de producción (ver
+`docs/` y el `Dockerfile`).
+
+## Filosofía
+
+1. **Locality of behavior**: un consumer vive completo en `src/consumers/<name>/`.
+   Para entender un consumer no se salta entre 5 carpetas.
+2. **Handlers como funciones puras**: `event → side effects`. Sin Kafka, sin
+   commits, sin retry. El BaseConsumer hace ese trabajo.
+3. **Una exception genérica + 2 subclases vacías**: `DomainError` parametrizable;
+   `RetryableError` y `NonRetryableError` SOLO para que el loop dispatchee.
+   NO crear `UserNotFoundError`, `InvalidSignatureError`, etc.
+4. **Idempotencia como primitiva del core**, no responsabilidad del handler.
+5. **Dev tools fuera de prod por construcción**, no por convención.
+
+## Estructura
+
+```
+src/
+├── core/           ← Framework Kafka. NO tocar para nueva lógica de negocio.
+├── config/         ← Settings globales (Pydantic BaseSettings).
+├── db/             ← Wrapper async sobre asyncpg.
+├── consumers/      ← Un folder por consumer. Copiar `example/` para crear nuevos.
+└── services/       ← Opcionales (multi-tenancy, KMS, etc) — vacío por default.
+
+tools/
+└── producer_demo/  ← FastAPI dev tool. NO va a producción.
+
+tests/
+├── unit/           ← pytest puro, sin infra.
+└── integration/    ← Testcontainers (Redpanda + Redis + Postgres reales).
+
+docs/
+├── creating-a-consumer.md
+└── patterns/       ← Patterns opt-in: background tasks, fair scheduling, db.
+```
+
+## Componentes clave en `src/core/`
+
+| Archivo | Qué hace |
+|---|---|
+| `consumer.py` | `BaseConsumer` abstracto. Loop, retry, DLQ, commit manual, ContextVars, idempotencia. **El archivo más importante del proyecto**. |
+| `client.py` | `KafkaClientFactory` con defaults de producción (`enable_auto_commit=False`, `acks=all`, idempotent producer). |
+| `exceptions.py` | `DomainError` + `RetryableError` + `NonRetryableError`. Captura file/function/line automáticamente. |
+| `context.py` | ContextVars: `current_message_id`, `current_consumer_name`, `current_topic`, `current_event_type`, `current_attempt`. |
+| `idempotency.py` | `IdempotencyStore` (Redis SET NX por `event_id`). |
+| `retry.py` | `backoff_with_jitter()` y `retry_async()`. Anti-thundering-herd. |
+| `health.py` | `HealthCheckWriter` escribe timestamp a `/tmp/healthcheck`. K8s exec probe. |
+| `metrics.py` | Counters/Histograms/Gauges Prometheus base + `start_metrics_server`. |
+| `logging.py` | structlog setup. `ProductionJSONRenderer` con orden de campos fijo. ContextVars se inyectan automático. |
+| `redis.py` | `RedisClientFactory` con pool por URL. |
+| `utils.py` | `validate_sql_identifier()`. |
+
+## Patrones obligatorios
+
+### Crear errors
+
+```python
+from src.core.exceptions import RetryableError, NonRetryableError
+
+# Validación de dominio → permanente
+raise NonRetryableError("Usuario no encontrado", context={"user_id": x})
+
+# Transient → reintentar
+raise RetryableError("DB timeout", context={"query": q, "elapsed_ms": t})
+```
+
+NUNCA crear nuevas subclases por caso de dominio. La info va en `context`.
+
+### Logging
+
+```python
+from src.core.logging import get_logger
+
+logger = get_logger(__name__)   # uno por módulo, no global
+
+# ContextVars (message_id, consumer_name, topic, etc) se inyectan automático.
+logger.info("doing_thing", extra_field=value)
+```
+
+### Settings de un nuevo consumer
+
+```python
+# src/consumers/<name>/settings.py
+class MyConsumerSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="MYCONSUMER_", ...)
+    topic: str
+    group_id: str
+
+@lru_cache
+def get_my_settings() -> MyConsumerSettings:
+    return MyConsumerSettings()
+```
+
+El `env_prefix` único es lo que permite que varios consumers convivan
+en el mismo `.env` sin colisionar.
+
+### Handler
+
+```python
+async def handle_X(event: XEvent, db: Database) -> None:
+    # 1. Validación de dominio
+    if not event.is_valid_for_X():
+        raise NonRetryableError("invalid X", context={...})
+
+    # 2. Side effects con dependencias INYECTADAS
+    await db.execute("INSERT ...", event.field)
+
+    # 3. Logging — ContextVars ya están seteados por el BaseConsumer
+    logger.info("X_processed", value=event.value)
+```
+
+NUNCA en un handler:
+- `consumer.commit()` — lo hace el BaseConsumer
+- `try/except RetryableError` — lo dispatcha el BaseConsumer
+- `redis.set("idempotency:...")` — lo hace el BaseConsumer
+- `import fastapi` — bloqueado por ruff banned-api
+
+## Comandos útiles
+
+```bash
+# Desarrollo
+uv sync                          # instala todo (incluye 'dev')
+uv sync --no-dev                 # sin FastAPI/uvicorn
+uv run example-consumer          # corre el example consumer
+uv run uvicorn tools.producer_demo.main:app --reload   # dev tool
+
+# Infra local
+docker compose up -d             # Redpanda + Redis + Postgres + Console UI
+
+# Tests
+uv run pytest tests/unit/ -v             # rápido, sin infra
+uv run pytest tests/integration/ -v      # Testcontainers, > 30s
+
+# Lint + types
+uv run ruff check src/ tests/
+uv run mypy src/
+
+# Migrations
+uv run alembic revision --autogenerate -m "add greetings table"
+uv run alembic upgrade head
+
+# Build de producción (FastAPI fuera)
+docker build -t kafka-consumer-template:latest .
+```
+
+## Garantías del BaseConsumer (no opcionales)
+
+Por cada mensaje, en este orden:
+1. Setea ContextVars.
+2. Parse JSON. Si falla → DLQ + commit.
+3. Idempotencia (Redis SET NX). Si duplicado → commit + skip.
+4. `process_message(event, raw_message)` con try/except clasificado:
+   - `RetryableError` → backoff+jitter + retry. Excede `max_retries` → DLQ + commit.
+   - `NonRetryableError` → DLQ + commit.
+   - `Exception` no clasificada → DLQ + commit.
+5. Si OK → commit del offset.
+
+El handler nunca ve duplicados, nunca commitea, nunca decide retry.
+
+## Cosas que NO se hacen
+
+- Importar `fastapi` en `src/` — bloqueado por `ruff` banned-api.
+- Crear nuevas subclases de excepción por caso de dominio.
+- Mockear `aiokafka` en tests — usar Testcontainers.
+- Usar `TestClient` de FastAPI — no hay HTTP que testear.
+- Auto-commit (`enable_auto_commit=True`) — el BaseConsumer lo desactiva explícito.
+- Atrapar `Exception` en handlers — dejar que propague al BaseConsumer.
+
+## Para crear un nuevo consumer
+
+Leer `docs/creating-a-consumer.md`. Resumen: `cp -r src/consumers/example/
+src/consumers/<nuevo>/`, cambiar prefijo de settings, reemplazar schemas y
+handlers, adaptar consumer.py, registrar entry point en pyproject.toml.
+
+## Para trabajo > 30s
+
+Leer `docs/patterns/background-tasks.md`. Overridear
+`process_message_background()` en vez de `process_message()`. El BaseConsumer
+commitea offset inmediato; la durabilidad viene de la tabla con `status='processing'`.
+Implementar crash recovery en `on_start()`.
