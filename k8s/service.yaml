@@ -1,0 +1,19 @@
+# Service para exponer el endpoint Prometheus /metrics
+# El consumer NO expone API HTTP — este service es SOLO para que Prometheus
+# pueda hacer scrape de las métricas.
+apiVersion: v1
+kind: Service
+metadata:
+  name: example-consumer-metrics
+  labels:
+    app: example-consumer
+    component: kafka-consumer
+spec:
+  type: ClusterIP
+  selector:
+    app: example-consumer
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP

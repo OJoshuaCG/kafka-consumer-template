@@ -1,0 +1,139 @@
+# Deployment del example-consumer.
+#
+# Para crear un deployment para un nuevo consumer:
+# 1. cp deployment.yaml deployment-mi-consumer.yaml
+# 2. Cambiar:
+#    - metadata.name
+#    - spec.selector.matchLabels.app
+#    - spec.template.metadata.labels.app
+#    - container.name
+#    - container.image
+#    - container.command (apunta al nuevo entry point)
+#    - env vars con prefijo del nuevo consumer (MI_CONSUMER_*)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: example-consumer
+  labels:
+    app: example-consumer
+    component: kafka-consumer
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: example-consumer
+  template:
+    metadata:
+      labels:
+        app: example-consumer
+        component: kafka-consumer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: kafka-consumer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: example-consumer
+          image: kafka-consumer-template:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "src.consumers.example.consumer"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: bootstrap-servers
+            - name: KAFKA_SECURITY_PROTOCOL
+              value: "SASL_SSL"
+            - name: KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: username
+            - name: KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: password
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: dsn
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: url
+            # Per-consumer (prefijo EXAMPLE_)
+            - name: EXAMPLE_TOPIC
+              value: "example-events"
+            - name: EXAMPLE_GROUP_ID
+              value: "example-consumer"
+            - name: EXAMPLE_DLQ_TOPIC
+              value: "example-events-dlq"
+          # Liveness: exec probe contra timestamp file.
+          # Sin HTTP server, sin puerto extra.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import os, time, sys
+                  age = time.time() - os.path.getmtime('/tmp/healthcheck')
+                  sys.exit(0 if age < 60 else 1)
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness: archivo debe existir y ser reciente
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os, sys; sys.exit(0 if os.path.exists('/tmp/healthcheck') else 1)"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: healthcheck-tmp
+              mountPath: /tmp
+      volumes:
+        - name: healthcheck-tmp
+          emptyDir:
+            sizeLimit: "10Mi"
+      terminationGracePeriodSeconds: 60   # generoso para handlers en vuelo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kafka-consumer
