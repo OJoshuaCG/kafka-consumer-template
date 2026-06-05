@@ -23,9 +23,14 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Override de la URL desde settings.
-# Convertir postgresql:// a postgresql+psycopg:// si hace falta — Alembic usa sync.
+# aiomysql es async — Alembic necesita el driver sync pymysql.
 settings = get_global_settings()
-sync_url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+_url = settings.database_url
+sync_url = (
+    _url.replace("mysql+aiomysql://", "mysql+pymysql://", 1)
+    if "mysql+aiomysql://" in _url
+    else _url.replace("mysql://", "mysql+pymysql://", 1).replace("mariadb://", "mysql+pymysql://", 1)
+)
 config.set_main_option("sqlalchemy.url", sync_url)
 
 # Para autogenerate. Si en el futuro agregamos modelos SQLAlchemy:
