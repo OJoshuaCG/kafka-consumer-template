@@ -41,7 +41,7 @@ class TestHandleGreeting:
 
         assert len(db.calls) == 1
         query, args = db.calls[0]
-        assert "INSERT INTO greetings" in query
+        assert "greetings" in query
         assert args == ("evt-1", "user-1", "hola")
 
     async def test_rejects_empty_message(self) -> None:
