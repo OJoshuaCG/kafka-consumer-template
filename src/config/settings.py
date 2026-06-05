@@ -33,7 +33,7 @@ class GlobalSettings(BaseSettings):
     kafka_sasl_password: str | None = None
 
     # DB
-    database_url: str = Field("postgresql://kafka:kafka@localhost:5432/kafka_consumer")
+    database_url: str = Field("mysql://kafka:kafka@localhost:3306/kafka_consumer")
 
     # Redis
     redis_url: str = Field("redis://localhost:6379/0")
