@@ -1,4 +1,4 @@
-"""Fixtures para tests de integración — Testcontainers con Redpanda, Redis, Postgres.
+"""Fixtures para tests de integración — Testcontainers con Redpanda, Redis, Postgres, MariaDB.
 
 Los contenedores se levantan UNA VEZ por sesión (scope="session") para no
 pagar el costo de bootstrap en cada test. El aislamiento entre tests viene
@@ -6,6 +6,7 @@ de:
 - topics únicos por test (random suffix)
 - group_ids únicos por test
 - clean-up de Redis namespaces
+- tablas aisladas por test en DB (creación/drop en cada fixture)
 
 Marcar tests con `@pytest.mark.integration` para correrlos selectivamente:
     uv run pytest tests/integration/ -v
@@ -21,6 +22,7 @@ import pytest
 import pytest_asyncio
 from redis.asyncio import Redis, from_url
 from testcontainers.kafka import RedpandaContainer
+from testcontainers.mysql import MySqlContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
@@ -38,6 +40,12 @@ def postgres() -> Iterator[PostgresContainer]:
 
 
 @pytest.fixture(scope="session")
+def mariadb() -> Iterator[MySqlContainer]:
+    with MySqlContainer("mariadb:11", username="test", password="test", dbname="test_consumer") as container:
+        yield container
+
+
+@pytest.fixture(scope="session")
 def redis_container() -> Iterator[RedisContainer]:
     with RedisContainer("redis:7-alpine") as container:
         yield container
@@ -50,11 +58,19 @@ def kafka_bootstrap(redpanda: RedpandaContainer) -> str:
 
 @pytest.fixture(scope="session")
 def postgres_dsn(postgres: PostgresContainer) -> str:
-    # asyncpg-compatible DSN
     return (
         f"postgresql://{postgres.username}:{postgres.password}"
         f"@{postgres.get_container_host_ip()}:{postgres.get_exposed_port(5432)}"
         f"/{postgres.dbname}"
+    )
+
+
+@pytest.fixture(scope="session")
+def mariadb_dsn(mariadb: MySqlContainer) -> str:
+    return (
+        f"mysql://{mariadb.username}:{mariadb.password}"
+        f"@{mariadb.get_container_host_ip()}:{mariadb.get_exposed_port(3306)}"
+        f"/{mariadb.dbname}"
     )
 
 
