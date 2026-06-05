@@ -27,7 +27,7 @@ from src.core.exceptions import NonRetryableError
 from src.core.logging import get_logger, setup_logging
 from src.core.metrics import start_metrics_server
 from src.core.redis import RedisClientFactory
-from src.db.database import Database
+from src.db.database import Database, create_database
 
 if TYPE_CHECKING:
     from aiokafka import ConsumerRecord
@@ -94,7 +94,7 @@ async def _build() -> ExampleConsumer:
     )
     redis_factory = RedisClientFactory()
     redis = redis_factory.client(global_settings.redis_url)
-    db = Database(global_settings.database_url)
+    db = create_database(global_settings.database_url)
 
     return ExampleConsumer(
         db=db,

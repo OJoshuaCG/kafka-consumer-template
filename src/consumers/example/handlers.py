@@ -36,8 +36,7 @@ async def handle_greeting(event: GreetingEvent, db: Database) -> None:
 
     try:
         await db.execute(
-            "INSERT INTO greetings (event_id, user_id, message) VALUES ($1, $2, $3) "
-            "ON CONFLICT (event_id) DO NOTHING",
+            "INSERT IGNORE INTO greetings (event_id, user_id, message) VALUES (%s, %s, %s)",
             event.event_id, event.user_id, event.message,
         )
     except Exception as exc:
@@ -54,8 +53,7 @@ async def handle_greeting(event: GreetingEvent, db: Database) -> None:
 async def handle_farewell(event: FarewellEvent, db: Database) -> None:
     """Procesa un evento de despedida."""
     await db.execute(
-        "INSERT INTO farewells (event_id, user_id, reason) VALUES ($1, $2, $3) "
-        "ON CONFLICT (event_id) DO NOTHING",
+        "INSERT IGNORE INTO farewells (event_id, user_id, reason) VALUES (%s, %s, %s)",
         event.event_id, event.user_id, event.reason,
     )
     logger.info("farewell_processed", user_id=event.user_id, reason=event.reason)
