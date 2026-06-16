@@ -42,3 +42,10 @@ Thumbs.db
 # Local data
 /tmp/
 healthcheck
+
+# Claude Code — solo archivos personales/locales (no ignorar toda la carpeta)
+.claude/settings.local.json
+.claude/plans/
+.claude/.cache/
+.claude/*.tmp
+.claude/worktrees/
