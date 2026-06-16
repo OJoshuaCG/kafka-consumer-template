@@ -22,7 +22,6 @@ para prevenir SQL injection. Parámetros SIEMPRE como placeholders (%s).
 
 from __future__ import annotations
 
-import re
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Any
