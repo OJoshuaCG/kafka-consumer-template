@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 import orjson
@@ -19,18 +21,12 @@ from aiokafka import AIOKafkaProducer
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(
-    title="Producer Demo",
-    description="Dev tool para disparar eventos hacia Redpanda local. NUNCA usar en producción.",
-    version="0.1.0",
-)
-
-# Lazy producer — se inicia en el primer request
+# Lazy producer — se inicia en el lifespan
 _producer: AIOKafkaProducer | None = None
 
 
-@app.on_event("startup")
-async def _start_producer() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _producer
     _producer = AIOKafkaProducer(
         bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
@@ -38,14 +34,18 @@ async def _start_producer() -> None:
         enable_idempotence=True,
     )
     await _producer.start()
-
-
-@app.on_event("shutdown")
-async def _stop_producer() -> None:
-    global _producer
+    yield
     if _producer is not None:
         await _producer.stop()
         _producer = None
+
+
+app = FastAPI(
+    title="Producer Demo",
+    description="Dev tool para disparar eventos hacia Redpanda local. NUNCA usar en producción.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 
 class GreetingPayload(BaseModel):
