@@ -115,6 +115,7 @@ ignore_missing_imports = true
 minversion = "8.0"
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
 addopts = [
     "-ra",
     "--strict-markers",

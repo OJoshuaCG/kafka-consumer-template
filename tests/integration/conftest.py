@@ -14,7 +14,6 @@ Marcar tests con `@pytest.mark.integration` para correrlos selectivamente:
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import AsyncIterator, Iterator
 
@@ -99,11 +98,3 @@ def unique_topic() -> str:
 @pytest.fixture
 def unique_group_id() -> str:
     return f"test-group-{uuid.uuid4().hex[:8]}"
-
-
-@pytest.fixture(scope="session")
-def event_loop() -> Iterator[asyncio.AbstractEventLoop]:
-    """Loop compartido por sesión — necesario con Testcontainers."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
